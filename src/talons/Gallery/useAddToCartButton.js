@@ -11,7 +11,6 @@ import BrowserPersistence from '@magento/peregrine/lib/util/simplePersistence';
 import { useAppContext } from '@magento/peregrine/lib/context/app';
 import { addToOfflineCart } from '../../util/offlineCart';
 
-
 /**
  * @param {String} props.item.uid - uid of item
  * @param {String} props.item.name - name of item
@@ -104,13 +103,28 @@ export const useAddToCartButton = props => {
                 currency: item.price_range?.maximum_price?.final_price?.currency
             };
 
+            // OFFLINE path: save locally and update UI immediately, avoid network calls
             if (!isOnline) {
                 addToOfflineCart(productData);
+
+                // dispatch event so UI (mini cart / counter) updates immediately using the eventing flow
+                dispatch({
+                    type: 'CART_ADD_ITEM',
+                    payload: {
+                        ...productData,
+                        // mark as offline so other logic/components can know
+                        offline: true,
+                        cartId: null
+                    }
+                });
+
                 setIsLoading(false);
+                return; // do not attempt to ensureCartId or network calls while offline
             }
 
+            // ONLINE path
             const newCartId = await ensureCartId();
-            if (isOnline) {
+            if (newCartId) {
                 await addToCart({
                     variables: {
                         cartId: newCartId,
@@ -122,6 +136,7 @@ export const useAddToCartButton = props => {
                 });
             }
 
+            // dispatch to update UI
             dispatch({
                 type: 'CART_ADD_ITEM',
                 payload: {
@@ -130,17 +145,11 @@ export const useAddToCartButton = props => {
                 }
             });
         } catch (error) {
-            console.error(error);
+            console.error('addToCart failed', error);
         } finally {
             setIsLoading(false);
         }
-    }, [
-        item,
-        isOnline,
-        ensureCartId,
-        addToCart,
-        dispatch
-    ]);
+    }, [item, isOnline, ensureCartId, addToCart, dispatch]);
 
     return {
         handleAddToCart,
@@ -148,3 +157,4 @@ export const useAddToCartButton = props => {
         isInStock: item.stock_status === 'IN_STOCK'
     };
 };
+export default useAddToCartButton;

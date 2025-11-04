@@ -1,4 +1,4 @@
-import { useCallback, useState, useEffect } from 'react';
+import { useCallback, useState, useEffect, useMemo } from 'react';
 import { useQuery } from '@apollo/client';
 import { useHistory, useLocation } from 'react-router-dom';
 
@@ -7,8 +7,6 @@ import { useDropdown } from '@magento/peregrine/lib/hooks/useDropdown';
 import { getOfflineCart } from '../../util/offlineCart';
 import { useAppContext } from '@magento/peregrine/lib/context/app';
 import BrowserPersistence from '@magento/peregrine/lib/util/simplePersistence';
-
-
 
 /**
  * Routes to hide the mini cart on.
@@ -57,7 +55,36 @@ export const useCartTrigger = props => {
         errorPolicy: 'all'
     });
 
-    const itemCount = data?.cart?.total_summary_quantity_including_config || 0;
+    const [{ isOnline }] = useAppContext();
+
+    // Keep offlineCount in local state and update on storage/custom events
+    const [offlineCount, setOfflineCount] = useState(() => {
+        const offlineItems = getOfflineCart();
+        return offlineItems.reduce((sum, it) => sum + (it.quantity || 0), 0);
+    });
+
+    useEffect(() => {
+        const update = () => {
+            const offlineItems = getOfflineCart();
+            setOfflineCount(
+                offlineItems.reduce((sum, it) => sum + (it.quantity || 0), 0)
+            );
+        };
+
+        // custom event triggered by addToOfflineCart/removeFromOfflineCart
+        window.addEventListener('offlineCartChanged', update);
+        // storage event for other tabs/windows
+        window.addEventListener('storage', update);
+
+        return () => {
+            window.removeEventListener('offlineCartChanged', update);
+            window.removeEventListener('storage', update);
+        };
+    }, []);
+
+    const itemCount = isOnline
+        ? data?.cart?.total_summary_quantity_including_config || 0
+        : offlineCount;
 
     const handleTriggerClick = useCallback(() => {
         // Open the mini cart.
@@ -84,3 +111,4 @@ export const useCartTrigger = props => {
         miniCartTriggerRef
     };
 };
+export default useCartTrigger;

@@ -19,8 +19,41 @@ export const addToOfflineCart = item => {
     }
 
     storage.setItem(OFFLINE_CART_KEY, existingItems);
+
+    // Notify in-tab listeners that offline cart changed.
+    try {
+        window.dispatchEvent(new Event('offlineCartChanged'));
+    } catch (e) {
+        // graceful fallback for environments without window
+        /* no-op */
+    }
+};
+
+export const removeFromOfflineCart = skuOrPredicate => {
+    const existingItems = getOfflineCart();
+    const remaining = existingItems.filter(it => {
+        if (typeof skuOrPredicate === 'function') {
+            return !skuOrPredicate(it);
+        }
+        return it.sku !== skuOrPredicate;
+    });
+
+    storage.setItem(OFFLINE_CART_KEY, remaining);
+
+    try {
+        window.dispatchEvent(new Event('offlineCartChanged'));
+    } catch (e) {
+        /* no-op */
+    }
+
+    return remaining;
 };
 
 export const clearOfflineCart = () => {
     storage.removeItem(OFFLINE_CART_KEY);
+    try {
+        window.dispatchEvent(new Event('offlineCartChanged'));
+    } catch (e) {
+        /* no-op */
+    }
 };
