@@ -9,13 +9,12 @@ import { useCartSync } from '../Cart/useCartSync';
 
 export const useCartPage = (props = {}) => {
     const operations = mergeOperations(DEFAULT_OPERATIONS, props.operations);
-    const { getCartDetailsQuery, removeItemMutation } = operations;
+    const { getCartDetailsQuery } = operations;
 
     const [{ cartId }] = useCartContext();
 
     const [isCartUpdating, setIsCartUpdating] = useState(false);
     const [wishlistSuccessProps, setWishlistSuccessProps] = useState(null);
-    const [removeItem] = useMutation(removeItemMutation);
 
     const [fetchCartDetails, { called, data, loading }] = useLazyQuery(
         getCartDetailsQuery,
@@ -25,19 +24,6 @@ export const useCartPage = (props = {}) => {
             errorPolicy: 'all'
         }
     );
-
-    const refetchCart = useCallback(() => {
-        if (cartId) {
-            return fetchCartDetails({ variables: { cartId } });
-        }
-        return Promise.resolve();
-    }, [fetchCartDetails, cartId]);
-
-    const { syncStatus, isSyncing } = useCartSync({
-        refetch: refetchCart,
-        removeItem,
-        cartId
-    });
 
     const hasItems = !!data?.cart?.total_quantity;
     const shouldShowLoadingIndicator = called && loading && !hasItems;
@@ -59,7 +45,7 @@ export const useCartPage = (props = {}) => {
 
         // Let the cart page know it is updating while we're waiting on network data.
         setIsCartUpdating(loading);
-    }, [fetchCartDetails, called, cartId, loading, isSyncing]);
+    }, [fetchCartDetails, called, cartId, loading]);
 
     useEffect(() => {
         if (called && cartId && !loading) {
@@ -81,8 +67,6 @@ export const useCartPage = (props = {}) => {
         onAddToWishlistSuccess,
         setIsCartUpdating,
         shouldShowLoadingIndicator,
-        wishlistSuccessProps,
-        syncStatus,
-        isSyncing
+        wishlistSuccessProps
     };
 };

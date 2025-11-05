@@ -26,11 +26,9 @@ const CartPage = props => {
         onAddToWishlistSuccess,
         setIsCartUpdating,
         shouldShowLoadingIndicator,
-        wishlistSuccessProps,
-        syncStatus,
-        isSyncing
+        wishlistSuccessProps
     } = talonProps;
-    console.log('isSyncing', isSyncing, 'syncStatus', syncStatus);
+
     const classes = useStyle(defaultClasses, props.classes);
     const { formatMessage } = useIntl();
     const [, { addToast }] = useToasts();
@@ -82,7 +80,6 @@ const CartPage = props => {
                     defaultMessage: 'Cart'
                 })}
             </StoreTitle>
-
             <div className={classes.heading_container}>
                 <h1
                     aria-live="polite"
@@ -94,20 +91,12 @@ const CartPage = props => {
                         defaultMessage={'Cart'}
                     />
                 </h1>
-                <div
-                    className={classes.syncStatus}
-                    data-status={syncStatus}
-                >
-                    {syncStatus}
-                </div>
                 <div className={classes.stockStatusMessageContainer}>
                     <StockStatusMessage cartItems={cartItems} />
                 </div>
             </div>
             <div className={classes.body}>
-                <div className={classes.items_container}>
-                    {productListing}
-                </div>
+                <div className={classes.items_container}>{productListing}</div>
                 <div className={classes.price_adjustments_container}>
                     {priceAdjustments}
                 </div>

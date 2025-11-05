@@ -15,7 +15,7 @@ import Icon from '@magento/venia-ui/lib/components/Icon';
 import StockStatusMessage from '@magento/venia-ui/lib/components/StockStatusMessage';
 import ProductList from '@magento/venia-ui/lib/components/MiniCart/ProductList';
 import defaultClasses from './miniCart.module.css';
-import operations from './miniCart.gql';
+import operations from '@magento/venia-ui/lib/components/MiniCart/miniCart.gql.js';
 
 const errorIcon = <Icon src={AlertCircleIcon} size={20} />;
 
@@ -29,7 +29,7 @@ const MiniCart = React.forwardRef((props, ref) => {
     const talonProps = useMiniCart({
         isOpen,
         setIsOpen,
-        operations,
+        operations
     });
 
     const {
@@ -43,8 +43,7 @@ const MiniCart = React.forwardRef((props, ref) => {
         subTotal,
         totalQuantity,
         configurableThumbnailSource,
-        storeUrlSuffix,
-        syncStatus
+        storeUrlSuffix
     } = talonProps;
 
     const classes = useStyle(defaultClasses, props.classes);
@@ -72,7 +71,6 @@ const MiniCart = React.forwardRef((props, ref) => {
             });
         }
     }, [addToast, errorMessage]);
-
 
     const header = subTotal ? (
         <Fragment>
@@ -106,9 +104,6 @@ const MiniCart = React.forwardRef((props, ref) => {
 
     const contents = isCartEmpty ? (
         <div className={classes.emptyCart}>
-            <div className={classes.syncStatus} data-status={syncStatus}>
-                {syncStatus}
-            </div>
             <div
                 className={classes.emptyMessage}
                 data-cy="MiniCart-emptyMessage"
@@ -134,18 +129,13 @@ const MiniCart = React.forwardRef((props, ref) => {
     ) : (
         <Fragment>
             <div className={classes.header}>{header}</div>
-            <div className={classes.syncStatus} data-status={syncStatus}>
-                {syncStatus}
-            </div>
             <div className={classes.body} data-cy="MiniCart-body">
                 <ProductList
                     items={productList}
                     loading={loading}
                     handleRemoveItem={handleRemoveItem}
                     closeMiniCart={closeMiniCart}
-                    configurableThumbnailSource={
-                        configurableThumbnailSource
-                    }
+                    configurableThumbnailSource={configurableThumbnailSource}
                     storeUrlSuffix={storeUrlSuffix}
                     totalQuantity={totalQuantity}
                 />

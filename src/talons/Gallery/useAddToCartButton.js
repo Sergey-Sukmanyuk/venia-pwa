@@ -49,7 +49,7 @@ const CART_DETAILS_QUERY = gql`
 
 export const useAddToCartButton = props => {
     const { item, urlSuffix } = props;
-    const [{ isOnline }] = useAppContext();
+
     const [, { dispatch }] = useEventingContext();
 
     const [isLoading, setIsLoading] = useState(false);
@@ -82,79 +82,115 @@ export const useAddToCartButton = props => {
     const ensureCartId = useCallback(async () => {
         let newCartId = cartId;
         if (!newCartId) {
+            console.log('No cart ID found, creating a new cart...');
             await cartApi.getCartDetails({
                 fetchCartId,
                 fetchCartDetails
             });
+
             newCartId = new BrowserPersistence().getItem('cartId');
+
+            if (!newCartId) {
+                throw new Error('Failed to create a new cart');
+            }
         }
         return newCartId;
     }, [cartId, cartApi, fetchCartId, fetchCartDetails]);
 
     const handleAddToCart = useCallback(async () => {
         try {
-            setIsLoading(true);
-            const quantity = 1;
-            const productData = {
-                sku: item.sku,
-                name: item.name,
-                quantity,
-                price: item.price_range?.maximum_price?.final_price?.value,
-                currency: item.price_range?.maximum_price?.final_price?.currency
-            };
+            if (productType === 'SimpleProduct' || productType === 'simple') {
+                setIsLoading(true);
 
-            // OFFLINE path: save locally and update UI immediately, avoid network calls
-            if (!isOnline) {
-                addToOfflineCart(productData);
+                const quantity = 1;
+                let newCartId;
 
-                // dispatch event so UI (mini cart / counter) updates immediately using the eventing flow
+                if (item.uid) {
+                    // ensure cart right before addToCart
+                    newCartId = await ensureCartId();
+
+                    await addToCart({
+                        variables: {
+                            cartId: newCartId,
+                            cartItem: {
+                                quantity,
+                                entered_options: [
+                                    {
+                                        uid: item.uid,
+                                        value: item.name
+                                    }
+                                ],
+                                sku: item.sku
+                            }
+                        }
+                    });
+                } else {
+                    // ensure cart right before addToCart
+                    newCartId = await ensureCartId();
+
+                    await addToCart({
+                        variables: {
+                            cartId: newCartId,
+                            cartItem: {
+                                quantity,
+                                sku: item.sku
+                            }
+                        }
+                    });
+                }
+
                 dispatch({
                     type: 'CART_ADD_ITEM',
                     payload: {
-                        ...productData,
-                        // mark as offline so other logic/components can know
-                        offline: true,
-                        cartId: null
+                        cartId: newCartId,
+                        sku: item.sku,
+                        name: item.name,
+                        pricing: {
+                            regularPrice: {
+                                amount:
+                                    item.price_range.maximum_price.regular_price
+                            }
+                        },
+                        priceTotal:
+                            item.price_range.maximum_price.final_price.value,
+                        currencyCode:
+                            item.price_range.maximum_price.final_price.currency,
+                        discountAmount:
+                            item.price_range.maximum_price.discount.amount_off,
+                        selectedOptions: null,
+                        quantity
                     }
                 });
 
                 setIsLoading(false);
-                return; // do not attempt to ensureCartId or network calls while offline
-            }
+            } else if (
+                productType === 'ConfigurableProduct' ||
+                productType === 'configurable'
+            ) {
+                const productLink = resourceUrl(
+                    `/${item.url_key}${urlSuffix || ''}`
+                );
 
-            // ONLINE path
-            const newCartId = await ensureCartId();
-            if (newCartId) {
-                await addToCart({
-                    variables: {
-                        cartId: newCartId,
-                        cartItem: {
-                            quantity,
-                            sku: item.sku
-                        }
-                    }
-                });
+                history.push(productLink);
+            } else {
+                console.warn('Unsupported product type unable to handle.');
             }
-
-            // dispatch to update UI
-            dispatch({
-                type: 'CART_ADD_ITEM',
-                payload: {
-                    ...productData,
-                    cartId: newCartId
-                }
-            });
         } catch (error) {
-            console.error('addToCart failed', error);
-        } finally {
-            setIsLoading(false);
+            console.error(error);
         }
-    }, [item, isOnline, ensureCartId, addToCart, dispatch]);
+    }, [
+        productType,
+        addToCart,
+        item,
+        dispatch,
+        history,
+        urlSuffix,
+        ensureCartId
+    ]);
 
     return {
         handleAddToCart,
-        isDisabled: isLoading || item.stock_status !== 'IN_STOCK',
-        isInStock: item.stock_status === 'IN_STOCK'
+        isDisabled,
+        isInStock
     };
 };
-export default useAddToCartButton;
