@@ -11,6 +11,45 @@ import { useCartSync } from '../Cart/useCartSync';
 import { getOfflineCart, removeFromOfflineCart } from '../../util/offlineCart';
 import { useAppContext } from '@magento/peregrine/lib/context/app';
 
+function getCartIdFromLocalStorage() {
+    if (typeof window === 'undefined' || !window.localStorage) return null;
+    const keys = [
+        'M2_VENIA_BROWSER_PERSISTENCE__cartId',
+        'M2_VENIA_BROWSER_PERSISTENCE__cart_id',
+        'm2_venia_browser_persistence__cartId'
+    ];
+    for (const key of keys) {
+        try {
+            const raw = localStorage.getItem(key);
+            if (!raw) continue;
+            try {
+                const obj = JSON.parse(raw);
+                if (
+                    obj &&
+                    typeof obj === 'object' &&
+                    obj.value !== undefined &&
+                    obj.value !== null
+                ) {
+                    try {
+                        const inner = JSON.parse(obj.value);
+                        if (typeof inner === 'string' && inner.length)
+                            return inner;
+                    } catch (e) {
+                        if (typeof obj.value === 'string' && obj.value.length)
+                            return obj.value.replace(/^"|"$/g, '');
+                    }
+                }
+            } catch (e) {
+                const candidate = raw.replace(/^"|"$/g, '');
+                if (candidate) return candidate;
+            }
+        } catch (e) {
+            continue;
+        }
+    }
+    return null;
+}
+
 export const useMiniCart = props => {
     const { isOpen, setIsOpen } = props;
 
@@ -72,8 +111,10 @@ export const useMiniCart = props => {
         cartId
     });
 
-    // State with offline items and subscription to changes
     const [offlineItems, setOfflineItems] = useState(() => getOfflineCart());
+
+    // serverItems: fallback storage-driven refetch result (used when context cartId is not available)
+    const [serverItems, setServerItems] = useState(undefined);
 
     useEffect(() => {
         const update = () => {
@@ -88,6 +129,68 @@ export const useMiniCart = props => {
             window.removeEventListener('storage', update);
         };
     }, []);
+
+    useEffect(() => {
+        let mounted = true;
+
+        const tryRefetchFromStorage = async () => {
+            try {
+                const storageCartId = getCartIdFromLocalStorage();
+                console.info('[useMiniCart] tryRefetchFromStorage', {
+                    isOnline,
+                    contextCartId: cartId,
+                    storageCartId
+                });
+                if (!isOnline) return;
+                if (!storageCartId) return;
+                // If context already has cartId, prefer the normal query flow (it will update miniCartData)
+                if (cartId) return;
+
+                if (typeof refetchMiniCart === 'function') {
+                    try {
+                        const res = await refetchMiniCart({
+                            cartId: storageCartId
+                        });
+                        const items = res?.data?.cart?.items;
+                        if (mounted) {
+                            if (items && items.length) {
+                                setServerItems(items);
+                            } else {
+                                setServerItems([]);
+                            }
+                        }
+                    } catch (err) {
+                        console.warn(
+                            '[useMiniCart] refetchMiniCart from storage failed',
+                            err
+                        );
+                    }
+                } else {
+                    console.info(
+                        '[useMiniCart] refetchMiniCart not available to call'
+                    );
+                }
+            } catch (e) {
+                console.warn('[useMiniCart] tryRefetchFromStorage error', e);
+            }
+        };
+
+        // run once immediately
+        tryRefetchFromStorage();
+
+        // Listen for updates that may add cartId to storage or change offline cart
+        window.addEventListener('storage', tryRefetchFromStorage);
+        window.addEventListener('offlineCartChanged', tryRefetchFromStorage);
+
+        return () => {
+            mounted = false;
+            window.removeEventListener('storage', tryRefetchFromStorage);
+            window.removeEventListener(
+                'offlineCartChanged',
+                tryRefetchFromStorage
+            );
+        };
+    }, [isOnline, cartId, refetchMiniCart]);
 
     // Helper: map offline item structure to the shape Minicart expects
     const mapOfflineToCartItem = offlineItem => {
@@ -122,11 +225,18 @@ export const useMiniCart = props => {
         if (!isOnline) {
             return offlineItems.map(mapOfflineToCartItem);
         }
-        if (!miniCartLoading) {
-            return miniCartData?.cart?.items;
+
+        if (!miniCartLoading && miniCartData?.cart?.items) {
+            return miniCartData.cart.items;
         }
+
+        if (typeof serverItems !== 'undefined') {
+            return serverItems;
+        }
+
+        // otherwise wait
         return undefined;
-    }, [miniCartData, miniCartLoading, isOnline, offlineItems]);
+    }, [miniCartData, miniCartLoading, isOnline, offlineItems, serverItems]);
 
     const totalQuantity = useMemo(() => {
         if (!isOnline) {
@@ -135,11 +245,17 @@ export const useMiniCart = props => {
                 0
             );
         }
-        if (!miniCartLoading) {
-            return miniCartData?.cart?.total_quantity;
+        if (
+            !miniCartLoading &&
+            miniCartData?.cart?.total_quantity !== undefined
+        ) {
+            return miniCartData.cart.total_quantity;
+        }
+        if (Array.isArray(serverItems)) {
+            return serverItems.reduce((sum, it) => sum + (it.quantity || 0), 0);
         }
         return undefined;
-    }, [miniCartData, miniCartLoading, isOnline, offlineItems]);
+    }, [miniCartData, miniCartLoading, isOnline, offlineItems, serverItems]);
 
     const subTotal = useMemo(() => {
         if (!isOnline) {
@@ -152,11 +268,26 @@ export const useMiniCart = props => {
                 value: total
             };
         }
-        if (!miniCartLoading) {
-            return miniCartData?.cart?.prices?.subtotal_excluding_tax;
+        if (
+            !miniCartLoading &&
+            miniCartData?.cart?.prices?.subtotal_excluding_tax
+        ) {
+            return miniCartData.cart.prices.subtotal_excluding_tax;
+        }
+        if (Array.isArray(serverItems) && serverItems.length) {
+            const total = serverItems.reduce((sum, it) => {
+                const price =
+                    (it.prices && it.prices.price && it.prices.price.value) ||
+                    0;
+                return sum + price * (it.quantity || 1);
+            }, 0);
+            return {
+                currency: serverItems[0]?.prices?.price?.currency || 'USD',
+                value: total
+            };
         }
         return undefined;
-    }, [miniCartData, miniCartLoading, isOnline, offlineItems]);
+    }, [miniCartData, miniCartLoading, isOnline, offlineItems, serverItems]);
 
     const closeMiniCart = useCallback(() => {
         setIsOpen(false);
@@ -179,17 +310,70 @@ export const useMiniCart = props => {
                     return;
                 }
 
-                await removeItem({
+                // Use effective cartId: prefer context, fallback to storage
+                const effectiveCartId = cartId || getCartIdFromLocalStorage();
+
+                if (!effectiveCartId) {
+                    console.warn(
+                        '[useMiniCart] removeItem: no cartId available'
+                    );
+                    return;
+                }
+
+                // perform server removal
+                const resp = await removeItem({
                     variables: {
-                        cartId,
+                        cartId: effectiveCartId,
                         itemId: id
                     }
                 });
+
+                // After successful removal, try to refresh mini cart UI:
+                // 1) If the normal query is active, refetchMiniCart will update miniCartData.
+                // 2) If we used serverItems fallback (query was skipped), update serverItems from refetch result or filter locally.
+                try {
+                    if (typeof refetchMiniCart === 'function') {
+                        const refetchRes = await refetchMiniCart({
+                            cartId: effectiveCartId
+                        });
+                        // if refetch returned items, update serverItems accordingly
+                        const items = refetchRes?.data?.cart?.items;
+                        if (Array.isArray(items)) {
+                            setServerItems(items);
+                        } else {
+                            // fallback: remove locally by uid if possible
+                            setServerItems(prev =>
+                                Array.isArray(prev)
+                                    ? prev.filter(it => it.uid !== id)
+                                    : prev
+                            );
+                        }
+                    } else {
+                        // no refetch available — optimistically remove from local serverItems
+                        setServerItems(prev =>
+                            Array.isArray(prev)
+                                ? prev.filter(it => it.uid !== id)
+                                : prev
+                        );
+                    }
+                } catch (e) {
+                    console.warn(
+                        '[useMiniCart] post-remove refetch/update failed',
+                        e
+                    );
+                    // best-effort: still remove locally
+                    setServerItems(prev =>
+                        Array.isArray(prev)
+                            ? prev.filter(it => it.uid !== id)
+                            : prev
+                    );
+                }
             } catch (err) {
                 console.error('Failed to remove item', err);
             }
         },
-        [isOnline, removeItem, cartId, dispatch]
+        // include refetchMiniCart in deps so callback updates when refetch changes
+        [isOnline, removeItem, cartId, dispatch, refetchMiniCart]
     );
 
     const derivedErrorMessage = useMemo(

@@ -44,8 +44,7 @@ const MiniCart = React.forwardRef((props, ref) => {
         totalQuantity,
         configurableThumbnailSource,
         storeUrlSuffix,
-        syncStatus,
-        isSyncing
+        syncStatus
     } = talonProps;
 
     const classes = useStyle(defaultClasses, props.classes);

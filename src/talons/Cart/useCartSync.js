@@ -142,7 +142,7 @@ export const useCartSync = props => {
                     '[useCartSync] no cartId — calling createEmptyCart'
                 );
                 const res = await createEmptyCart();
-                const newId = res?.data?.createEmptyCart;
+                const newId = res && res.data && res.data.createEmptyCart;
                 console.info(
                     '[useCartSync] createEmptyCart response',
                     res,
@@ -188,6 +188,9 @@ export const useCartSync = props => {
             const offlineItems = getOfflineCart() || [];
             console.info('[useCartSync] offlineItems', offlineItems);
 
+            // array to collect products removed because they are out of stock
+            const removedDueToOOS = [];
+
             if (offlineItems.length > 0) {
                 // refetch server cart only with valid cartIdToUse to avoid null-variable error
                 let serverCartData = null;
@@ -196,7 +199,7 @@ export const useCartSync = props => {
                         const refetchResult = await refetch({
                             cartId: cartIdToUse
                         });
-                        serverCartData = refetchResult?.data;
+                        serverCartData = refetchResult && refetchResult.data;
                         console.info(
                             '[useCartSync] refetch result',
                             refetchResult
@@ -214,12 +217,21 @@ export const useCartSync = props => {
                     );
                 }
 
-                const serverItems = serverCartData?.cart?.items || [];
+                const serverItems =
+                    (serverCartData &&
+                        serverCartData.cart &&
+                        serverCartData.cart.items) ||
+                    [];
                 console.info('[useCartSync] server cart items', serverItems);
 
                 const serverSkus = new Set(
                     serverItems
-                        .map(i => i?.product?.sku || i?.sku)
+                        .map(function(i) {
+                            return (
+                                (i && i.product && i.product.sku) ||
+                                (i && i.sku)
+                            );
+                        })
                         .filter(Boolean)
                 );
                 console.info(
@@ -227,7 +239,8 @@ export const useCartSync = props => {
                     Array.from(serverSkus)
                 );
 
-                for (const item of offlineItems) {
+                for (let idx = 0; idx < offlineItems.length; idx++) {
+                    const item = offlineItems[idx];
                     try {
                         console.info('[useCartSync] processing', item);
 
@@ -235,16 +248,21 @@ export const useCartSync = props => {
                         let stockStatus = null;
                         let productName = item.name || item.sku;
                         try {
-                            const { data } = await apolloClient.query({
+                            const queryRes = await apolloClient.query({
                                 query: PRODUCT_STOCK_QUERY,
                                 variables: { sku: item.sku },
                                 fetchPolicy: 'no-cache' // critical: avoid writing incomplete product to cache
                             });
                             console.info(
                                 '[useCartSync] stock query result',
-                                data
+                                queryRes && queryRes.data
                             );
-                            const found = data?.products?.items?.[0];
+                            const found =
+                                queryRes &&
+                                queryRes.data &&
+                                queryRes.data.products &&
+                                queryRes.data.products.items &&
+                                queryRes.data.products.items[0];
                             if (found) {
                                 stockStatus = found.stock_status;
                                 productName = found.name || productName;
@@ -256,36 +274,69 @@ export const useCartSync = props => {
                             );
                         }
 
+                        // If backend explicitly reports OUT_OF_STOCK
                         if (
                             stockStatus &&
-                            `${stockStatus}`.toUpperCase() === 'OUT_OF_STOCK'
+                            String(stockStatus).toUpperCase() === 'OUT_OF_STOCK'
                         ) {
-                            removeFromOfflineCart(item.sku);
-                            window.dispatchEvent(
-                                new Event('offlineCartChanged')
-                            );
-                            addToast({
-                                type: 'error',
-                                message: `${productName} (${
-                                    item.sku
-                                }) removed — out of stock.`,
-                                timeout: 6000
+                            try {
+                                removeFromOfflineCart(item.sku);
+                                window.dispatchEvent(
+                                    new Event('offlineCartChanged')
+                                );
+                            } catch (e) {
+                                console.warn(
+                                    'Failed to remove offline item',
+                                    e
+                                );
+                            }
+
+                            try {
+                                addToast({
+                                    type: 'error',
+                                    message:
+                                        productName +
+                                        ' (' +
+                                        item.sku +
+                                        ') was removed from your cart because it is out of stock.',
+                                    timeout: 6000
+                                });
+                            } catch (toastErr) {
+                                console.warn(
+                                    '[useCartSync] addToast failed for OOS removal',
+                                    toastErr
+                                );
+                            }
+
+                            removedDueToOOS.push({
+                                sku: item.sku,
+                                name: productName
                             });
                             continue;
                         }
 
                         if (serverSkus.has(item.sku)) {
-                            removeFromOfflineCart(item.sku);
-                            window.dispatchEvent(
-                                new Event('offlineCartChanged')
-                            );
+                            try {
+                                removeFromOfflineCart(item.sku);
+                                window.dispatchEvent(
+                                    new Event('offlineCartChanged')
+                                );
+                            } catch (e) {
+                                console.warn(
+                                    'Failed to remove duplicate offline item',
+                                    e
+                                );
+                            }
                             continue;
                         }
 
                         console.info(
-                            `[useCartSync] adding ${item.sku} qty ${
-                                item.quantity
-                            } to cart ${cartIdToUse}`
+                            '[useCartSync] adding ' +
+                                item.sku +
+                                ' qty ' +
+                                item.quantity +
+                                ' to cart ' +
+                                cartIdToUse
                         );
                         let addResult = null;
                         try {
@@ -304,15 +355,91 @@ export const useCartSync = props => {
                                 resp
                             );
                         } catch (err) {
-                            console.warn('[useCartSync] addToCart error', err);
+                            // Inspect GraphQL errors for stock-related messages and show toast with reason
+                            try {
+                                const gqlMessages =
+                                    (err &&
+                                        err.graphQLErrors &&
+                                        err.graphQLErrors
+                                            .map(function(e) {
+                                                return e.message;
+                                            })
+                                            .join('; ')) ||
+                                    null;
+                                const reason =
+                                    gqlMessages ||
+                                    (err && err.message) ||
+                                    'Failed to add item';
+                                const isStockError =
+                                    reason &&
+                                    /stock|out of stock|not available|unavailable|salable|inventory/i.test(
+                                        reason
+                                    );
+
+                                if (isStockError) {
+                                    try {
+                                        removeFromOfflineCart(item.sku);
+                                        window.dispatchEvent(
+                                            new Event('offlineCartChanged')
+                                        );
+                                    } catch (e) {
+                                        console.warn(
+                                            'Failed to remove offline item after stock error',
+                                            e
+                                        );
+                                    }
+                                    try {
+                                        addToast({
+                                            type: 'error',
+                                            message:
+                                                productName +
+                                                ' (' +
+                                                item.sku +
+                                                ') was removed from your cart: ' +
+                                                reason,
+                                            timeout: 7000
+                                        });
+                                    } catch (toastErr) {
+                                        console.warn(
+                                            '[useCartSync] addToast failed for GraphQL stock error',
+                                            toastErr
+                                        );
+                                    }
+                                    // record for summary if desired
+                                    removedDueToOOS.push({
+                                        sku: item.sku,
+                                        name: productName,
+                                        reason: reason
+                                    });
+                                    // skip further processing for this item
+                                    continue;
+                                } else {
+                                    console.warn(
+                                        '[useCartSync] addToCart failed (non-stock):',
+                                        err
+                                    );
+                                }
+                            } catch (inspectErr) {
+                                console.warn(
+                                    '[useCartSync] error inspecting addToCart error',
+                                    inspectErr
+                                );
+                            }
                         }
 
-                        const success = !!addResult?.data;
+                        const success = !!(addResult && addResult.data);
                         if (success) {
-                            removeFromOfflineCart(item.sku);
-                            window.dispatchEvent(
-                                new Event('offlineCartChanged')
-                            );
+                            try {
+                                removeFromOfflineCart(item.sku);
+                                window.dispatchEvent(
+                                    new Event('offlineCartChanged')
+                                );
+                            } catch (e) {
+                                console.warn(
+                                    'Failed to remove offline item after add',
+                                    e
+                                );
+                            }
                             serverSkus.add(item.sku);
                         } else {
                             console.warn(
@@ -331,8 +458,36 @@ export const useCartSync = props => {
                     remaining
                 );
                 if (!remaining || remaining.length === 0) {
-                    clearOfflineCart();
-                    window.dispatchEvent(new Event('offlineCartChanged'));
+                    try {
+                        clearOfflineCart();
+                        window.dispatchEvent(new Event('offlineCartChanged'));
+                    } catch (e) {
+                        console.warn('clearOfflineCart error', e);
+                    }
+                }
+
+                // Summary toast if multiple removed
+                if (removedDueToOOS && removedDueToOOS.length > 1) {
+                    try {
+                        const names = removedDueToOOS
+                            .map(function(i) {
+                                return i.name || i.sku;
+                            })
+                            .join(', ');
+                        addToast({
+                            type: 'error',
+                            message:
+                                'Some items were removed from your cart because they are not available: ' +
+                                names +
+                                '.',
+                            timeout: 8000
+                        });
+                    } catch (toastErr) {
+                        console.warn(
+                            '[useCartSync] addToast summary failed',
+                            toastErr
+                        );
+                    }
                 }
 
                 addToast({
